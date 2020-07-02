@@ -9,6 +9,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Net;
+using System.IO;
 
 namespace AsiakastietoApi
 {
@@ -21,19 +23,70 @@ namespace AsiakastietoApi
             string userId = ValidateHeader("UserId", req, headerError);
             string password = ValidateHeader("Password", req, headerError);
             string checkSumkey = ValidateHeader("CheckSumKey", req, headerError);
+            string searchTerm = ValidateHeader("SearchTerm", req, headerError);
+            string mode = ValidateHeader("Mode", req, headerError); // demo (by default) or prod
+            string language = ValidateHeader("Language", req, headerError); // FI for Finnish, EN for English (default), SV for Swedish
             string endUser = "ccccc";
 
             if (headerError.Count > 0)
                 return new ObjectResult("ERROR: " + String.Join(" ", headerError.ToArray())) { StatusCode = 400 };
 
-            string demoUrl = "https://demo.asiakastieto.fi/services/company5/REST";
-            string prodUrl = "https://www.asiakastieto.fi/services/company5/REST";
+            // Checksum
 
-            var checksum = FormatChecksum(userId, endUser, checkSumkey, log);
-            log.LogInformation("Checksum: " + checksum);
+            string timestamp = FormatAsiakastietoTimeStamp();
+            string checksum = FormatChecksum(userId, endUser, timestamp, checkSumkey);
 
-            return new OkObjectResult($"hash: {checksum}");
+            // Fetch data from api
+
+            string url = "https://demo.asiakastieto.fi/services/company5/REST";
+            string target = "TAP1";
+
+            if (mode == "prod")
+            {
+                url = "https://www.asiakastieto.fi/services/company5/REST";
+                target = "PAP1";
+            }
+
+            var queryParameters =
+                $"userid={userId}&" +
+                $"passwd={password}&" +
+                $"timestamp={Uri.EscapeDataString(timestamp)}&" +
+                $"checksum={checksum}&" +
+                "version=5.01&" +
+                $"enduser={endUser}&" +
+                "reqmsg=COMPANY&" + // always COMPANY
+                "format=xml&" + // always xml
+                $"target={target}&" + // TAP1 for demo, PAP1 for production
+                $"lang={language}"; // FI for Finnish, EN for English, SV for Swedish
+
+            var searchParameters =
+                "segment=A&" + // Always A
+                "qtype=01&" + // Always 01
+                "request=N&" + // Always N
+                $"name={searchTerm}"; // Search term. Company name "Asiakastieto" or part of the company name "Asiakast"
+
+            var queryString = $"{url}?{queryParameters}&{searchParameters}";
+
+            var httpWebRequest = (HttpWebRequest)WebRequest.Create(queryString);
+            httpWebRequest.Method = "GET";
+
+            var response = "";
+            try
+            {
+                var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
+                using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
+                {
+                    response = streamReader.ReadToEnd();
+                }
+            }
+            catch (WebException webException)
+            {
+                return new ObjectResult(webException.Message) { StatusCode = 500 };
+            }
+
+            return new ContentResult { Content = response, ContentType = "application/xml" };
         }
+
 
         private static string ValidateHeader(string headerKey, HttpRequest req, List<string> headerError)
         {
@@ -41,24 +94,32 @@ namespace AsiakastietoApi
                 return headerValue.FirstOrDefault();
             else
             {
+                if (headerKey == "Mode")
+                    return "demo"; // Demo by default.
+
+                if (headerKey == "Language")
+                    return "EN"; // By default products should be collected starting from 0.
+
                 headerError.Add($"Header '{headerKey}' missing.");
                 return "";
             }
         }
-
-        private static object FormatChecksum(string userId, string endUser, string checkSumkey, ILogger log)
+        private static string FormatAsiakastietoTimeStamp()
         {
-            string dateFormat = "yyyyMMddHHmmssff";
-            var timestamp = DateTime.UtcNow.ToString(dateFormat); // YYYYMMDDHHMMSSXX
-            string offset = "+02"; //time zone correction in relation to GMT. In Finland always "+02". Daylight saving time is not added.
+            string dateFormat = "yyyyMMddHHmmssff"; // As Asiakastieto wants it
+            TimeZoneInfo finTime = TimeZoneInfo.FindSystemTimeZoneById("FLE Standard Time");
+            DateTimeOffset finTimeNow = TimeZoneInfo.ConvertTime(DateTime.UtcNow, finTime);
+            var timestamp = finTimeNow.ToString(dateFormat);
+            string offset = "+02"; // Time zone correction in relation to GMT. In Finland always "+02". Daylight saving time is not added.
             string consecutiveNumber = "00000"; // from Asiakastieto, this should work in most cases
-            string asiakastietoTimestamp = timestamp + offset + consecutiveNumber;
+
+            return timestamp + offset + consecutiveNumber;
+        }
+
+        private static string FormatChecksum(string userId, string endUser, string asiakastietoTimestamp, string checkSumkey)
+        {
 
             string checksumString = $"{userId}&{endUser}&{asiakastietoTimestamp}&{checkSumkey}&";
-            log.LogInformation("Checksum string: " + checksumString);
-
-            // checksumStringExample = "123456123456&ccccc&2020010111000000+0200000&9Gk487z6qBC48R27hpq6RBPoS1hWt88Z755Ku7ub5M5NE08HRj2Mt7KOQhtL0spr&";
-            // The one above should produce checksum 442B66F745DE4CAF0A1E6DC551C9C676205498C7CDF28036DB2229573A12D71C14F13430A1E34D6B4CAF1360E9573931019A7DACB27178D5998B97F4301D54EE
 
             using (SHA512 shaM = new SHA512Managed())
             {
