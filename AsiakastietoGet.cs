@@ -10,6 +10,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Net;
+using System.IO;
 
 namespace AsiakastietoApi
 {
@@ -30,16 +31,56 @@ namespace AsiakastietoApi
             // Checksum
 
             string timestamp = FormatAsiakastietoTimeStamp();
-
-            var checksum = FormatChecksum(userId, endUser, timestamp, checkSumkey, log);
-            log.LogInformation("Checksum: " + checksum);
+            string checksum = FormatChecksum(userId, endUser, timestamp, checkSumkey, log);
+            //log.LogInformation("Checksum: " + checksum);
 
             // Fetch data from api
 
             string demoUrl = "https://demo.asiakastieto.fi/services/company5/REST";
+            string demoTarget = "TAP1";
             string prodUrl = "https://www.asiakastieto.fi/services/company5/REST";
+            string prodTarget = "PAP1";
 
-            return new OkObjectResult($"hash: {checksum}");
+            string language = "FI"; // FI for Finnish, EN for English, SV for Swedish
+
+            var queryParameters =
+                $"userid={userId}&" +
+                $"passwd={password}&" +
+                $"timestamp={Uri.EscapeDataString(timestamp)}&" +
+                $"checksum={checksum}&" +
+                $"version=5.01&" +
+                $"enduser={endUser}&" +
+                $"reqmsg=COMPANY&" + // always COMPANY
+                $"format=xml&" + // always xml
+                $"target={demoTarget}&" + // TAP1 for demo, PAP1 for production
+                $"lang={language}"; // FI for Finnish, EN for English, SV for Swedish
+
+            var searchParameters =
+                "segment=A&" + // Always A
+                "qtype=01&" + // Always 01
+                "request=N&" + // Always N
+                "name=asiakastieto"; // Search term. Company name "Asiakastieto" or part of the company name "Asiakast"
+
+            var queryString = $"{demoUrl}?{queryParameters}&{searchParameters}";
+
+            var httpWebRequest = (HttpWebRequest)WebRequest.Create(queryString);
+            httpWebRequest.Method = "GET";
+
+            var response = "";
+            try
+            {
+                var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
+                using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
+                {
+                    response = streamReader.ReadToEnd();
+                }
+            }
+            catch (WebException webException)
+            {
+                return new ObjectResult(webException.Message) { StatusCode = 401 };
+            }
+
+            return new OkObjectResult(response);
         }
 
 
@@ -55,19 +96,21 @@ namespace AsiakastietoApi
         }
         private static string FormatAsiakastietoTimeStamp()
         {
-            string dateFormat = "yyyyMMddHHmmssff";
-            var timestamp = DateTime.UtcNow.ToString(dateFormat); // YYYYMMDDHHMMSSXX
+            string dateFormat = "yyyyMMddHHmmssff"; // As Asiakastieto wants it
+            TimeZoneInfo finTime = TimeZoneInfo.FindSystemTimeZoneById("FLE Standard Time");
+            DateTimeOffset finTimeNow = TimeZoneInfo.ConvertTime(DateTime.UtcNow, finTime);
+            var timestamp = finTimeNow.ToString(dateFormat);
             string offset = "+02"; //time zone correction in relation to GMT. In Finland always "+02". Daylight saving time is not added.
             string consecutiveNumber = "00000"; // from Asiakastieto, this should work in most cases
 
             return timestamp + offset + consecutiveNumber;
         }
 
-        private static object FormatChecksum(string userId, string endUser, string asiakastietoTimestamp, string checkSumkey, ILogger log)
+        private static string FormatChecksum(string userId, string endUser, string asiakastietoTimestamp, string checkSumkey, ILogger log)
         {
 
             string checksumString = $"{userId}&{endUser}&{asiakastietoTimestamp}&{checkSumkey}&";
-            log.LogInformation("Checksum string: " + checksumString);
+            //log.LogInformation("Checksum string: " + checksumString);
 
             // checksumStringExample = "123456123456&ccccc&2020010111000000+0200000&9Gk487z6qBC48R27hpq6RBPoS1hWt88Z755Ku7ub5M5NE08HRj2Mt7KOQhtL0spr&";
             // The one above should produce checksum 442B66F745DE4CAF0A1E6DC551C9C676205498C7CDF28036DB2229573A12D71C14F13430A1E34D6B4CAF1360E9573931019A7DACB27178D5998B97F4301D54EE
