@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Net;
 
 namespace AsiakastietoApi
 {
@@ -26,14 +27,21 @@ namespace AsiakastietoApi
             if (headerError.Count > 0)
                 return new ObjectResult("ERROR: " + String.Join(" ", headerError.ToArray())) { StatusCode = 400 };
 
+            // Checksum
+
+            string timestamp = FormatAsiakastietoTimeStamp();
+
+            var checksum = FormatChecksum(userId, endUser, timestamp, checkSumkey, log);
+            log.LogInformation("Checksum: " + checksum);
+
+            // Fetch data from api
+
             string demoUrl = "https://demo.asiakastieto.fi/services/company5/REST";
             string prodUrl = "https://www.asiakastieto.fi/services/company5/REST";
 
-            var checksum = FormatChecksum(userId, endUser, checkSumkey, log);
-            log.LogInformation("Checksum: " + checksum);
-
             return new OkObjectResult($"hash: {checksum}");
         }
+
 
         private static string ValidateHeader(string headerKey, HttpRequest req, List<string> headerError)
         {
@@ -45,14 +53,18 @@ namespace AsiakastietoApi
                 return "";
             }
         }
-
-        private static object FormatChecksum(string userId, string endUser, string checkSumkey, ILogger log)
+        private static string FormatAsiakastietoTimeStamp()
         {
             string dateFormat = "yyyyMMddHHmmssff";
             var timestamp = DateTime.UtcNow.ToString(dateFormat); // YYYYMMDDHHMMSSXX
             string offset = "+02"; //time zone correction in relation to GMT. In Finland always "+02". Daylight saving time is not added.
             string consecutiveNumber = "00000"; // from Asiakastieto, this should work in most cases
-            string asiakastietoTimestamp = timestamp + offset + consecutiveNumber;
+
+            return timestamp + offset + consecutiveNumber;
+        }
+
+        private static object FormatChecksum(string userId, string endUser, string asiakastietoTimestamp, string checkSumkey, ILogger log)
+        {
 
             string checksumString = $"{userId}&{endUser}&{asiakastietoTimestamp}&{checkSumkey}&";
             log.LogInformation("Checksum string: " + checksumString);
