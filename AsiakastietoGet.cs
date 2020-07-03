@@ -20,10 +20,10 @@ namespace AsiakastietoApi
         public static async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Function, "get", "post", Route = null)] HttpRequest req, ILogger log)
         {
             List<string> headerError = new List<string>();
-            string userId = ValidateHeader("UserId", req, headerError);
-            string password = ValidateHeader("Password", req, headerError);
-            string checkSumkey = ValidateHeader("CheckSumKey", req, headerError);
-            string searchTerm = ValidateHeader("SearchTerm", req, headerError);
+            string userId = ValidateHeader("UserId", req, headerError); // From Asiakastieto
+            string password = ValidateHeader("Password", req, headerError); // From Asiakastieto
+            string checkSumkey = ValidateHeader("CheckSumKey", req, headerError); // From Asiakastieto
+            string searchTerm = ValidateHeader("SearchTerm", req, headerError); // Search term. Company name "Asiakastieto" or part of the company name "Asiakast"
             string mode = ValidateHeader("Mode", req, headerError); // demo (by default) or prod
             string language = ValidateHeader("Language", req, headerError); // FI for Finnish, EN for English (default), SV for Swedish
             string endUser = "ccccc";
@@ -32,20 +32,12 @@ namespace AsiakastietoApi
                 return new ObjectResult("ERROR: " + String.Join(" ", headerError.ToArray())) { StatusCode = 400 };
 
             // Checksum
-
             string timestamp = FormatAsiakastietoTimeStamp();
             string checksum = FormatChecksum(userId, endUser, timestamp, checkSumkey);
 
             // Fetch data from api
 
-            string url = "https://demo.asiakastieto.fi/services/company5/REST";
-            string target = "TAP1";
-
-            if (mode == "prod")
-            {
-                url = "https://www.asiakastieto.fi/services/company5/REST";
-                target = "PAP1";
-            }
+            var (url, target) = ModeDetails(mode);
 
             var queryParameters =
                 $"userid={userId}&" +
@@ -63,14 +55,14 @@ namespace AsiakastietoApi
                 "segment=A&" + // Always A
                 "qtype=01&" + // Always 01
                 "request=N&" + // Always N
-                $"name={searchTerm}"; // Search term. Company name "Asiakastieto" or part of the company name "Asiakast"
+                $"name={searchTerm}";
 
             var queryString = $"{url}?{queryParameters}&{searchParameters}";
 
             var httpWebRequest = (HttpWebRequest)WebRequest.Create(queryString);
             httpWebRequest.Method = "GET";
 
-            var response = "";
+            string response = "";
             try
             {
                 var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
@@ -87,7 +79,6 @@ namespace AsiakastietoApi
             return new ContentResult { Content = response, ContentType = "application/xml" };
         }
 
-
         private static string ValidateHeader(string headerKey, HttpRequest req, List<string> headerError)
         {
             if (req.Headers.TryGetValue(headerKey, out var headerValue))
@@ -95,10 +86,10 @@ namespace AsiakastietoApi
             else
             {
                 if (headerKey == "Mode")
-                    return "demo"; // Demo by default.
+                    return "demo"; // Demo by default
 
                 if (headerKey == "Language")
-                    return "EN"; // By default products should be collected starting from 0.
+                    return "EN"; // EN by default
 
                 headerError.Add($"Header '{headerKey}' missing.");
                 return "";
@@ -106,7 +97,7 @@ namespace AsiakastietoApi
         }
         private static string FormatAsiakastietoTimeStamp()
         {
-            string dateFormat = "yyyyMMddHHmmssff"; // As Asiakastieto wants it
+            string dateFormat = "yyyyMMddHHmmssff"; // The format Asiakastieto wants it to be
             TimeZoneInfo finTime = TimeZoneInfo.FindSystemTimeZoneById("FLE Standard Time");
             DateTimeOffset finTimeNow = TimeZoneInfo.ConvertTime(DateTime.UtcNow, finTime);
             var timestamp = finTimeNow.ToString(dateFormat);
@@ -118,7 +109,6 @@ namespace AsiakastietoApi
 
         private static string FormatChecksum(string userId, string endUser, string asiakastietoTimestamp, string checkSumkey)
         {
-
             string checksumString = $"{userId}&{endUser}&{asiakastietoTimestamp}&{checkSumkey}&";
 
             using (SHA512 shaM = new SHA512Managed())
@@ -136,6 +126,14 @@ namespace AsiakastietoApi
                 result.Append(hash[i].ToString("X2"));
             }
             return result.ToString();
+        }
+
+        private static (string, string) ModeDetails(string mode)
+        {
+            if (mode == "prod")
+                return ("https://www.asiakastieto.fi/services/company5/REST", "PAP1");
+
+            return ("https://demo.asiakastieto.fi/services/company5/REST", "TAP1");
         }
     }
 }
